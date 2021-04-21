@@ -354,7 +354,8 @@
           this.clearLayers();
           this.addData(feature, this.options.nativeCS, this.options.nativeZoom);
           e.popup._navigationBar.querySelector("p").innerText = (e.i + 1) + "/" + this.options._leafletLayer._totalFeatureCount;
-          e.popup._content.querySelector("iframe").srcdoc = `<meta http-equiv="content-security-policy" content="script-src 'none';">` + feature.querySelector("properties").innerHTML;
+          e.popup._content.querySelector("iframe").setAttribute("sandbox", "allow-same-origin allow-forms");
+          e.popup._content.querySelector("iframe").srcdoc = feature.querySelector("properties").innerHTML;
         }
       },
 
@@ -1912,6 +1913,7 @@
       },
       changeOpacity: function(opacity) {
           this._container.style.opacity = opacity;
+          if(this.opacityEl) this.opacityEl.value = opacity;
       },
       onAdd: function (map) {
           if(this._extent && !this._validProjection(map)){
@@ -2045,11 +2047,9 @@
         let noLayer = false;
         if(this._templateVars){
           for(let template of this._templateVars)
-            if(!template.projectionMatch) noLayer = true;
+            if(!template.projectionMatch && template.projection !== map.options.projection) noLayer = true;
         }
-        if(noLayer || this.getProjection() !== map.options.projection.toUpperCase())
-          return false;
-        return true;
+        return !(noLayer || this.getProjection() !== map.options.projection.toUpperCase());
       },
 
       //sets the <layer-> elements .bounds property 
@@ -2118,31 +2118,26 @@
             // since we are following a zoom link we will be getting a new
             // layer almost, resetting child content as appropriate
             this._href = this._extent.zoomin;
+            this._layerEl.src = this._extent.zoomin;
             // this.href is the "public" property. When a dynamic layer is
             // accessed, this value changes with every new extent received
             this.href = this._extent.zoomin;
+            this._layerEl.src = this._extent.zoomin;
           } else if (this._extent.zoomout && toZoom < min) {
             this._href = this._extent.zoomout;
             this.href = this._extent.zoomout;
+            this._layerEl.src = this._extent.zoomout;
           }
         }
-        if (this._templatedLayer && canZoom ) {
-          // get the new extent
-          this._initExtent();
-        }
+        if (this._templatedLayer && canZoom ) ;
       },
       onRemove: function (map) {
           L.DomUtil.remove(this._container);
-          if(this._staticTileLayer){
-            map.removeLayer(this._staticTileLayer);
-          }
-          if(this._mapmlvectors){
-            map.removeLayer(this._mapmlvectors);
-          }
-          map.removeLayer(this._imageLayer);
-          if (this._templatedLayer) {
-              map.removeLayer(this._templatedLayer);
-          }
+          if(this._staticTileLayer) map.removeLayer(this._staticTileLayer);
+          if(this._mapmlvectors) map.removeLayer(this._mapmlvectors);
+          if(this._imageLayer) map.removeLayer(this._imageLayer);
+          if (this._templatedLayer) map.removeLayer(this._templatedLayer);
+
           map.fire("checkdisabled");
           map.off("popupopen", this._attachSkipButtons);
       },
@@ -2342,6 +2337,7 @@
           opacityControlSummary = document.createElement('summary'),
           opacityControlSummaryLabel = document.createElement('label'),
           mapEl = this._layerEl.parentNode;
+          this.opacityEl = opacity;
           
           summaryContainer.classList.add('mapml-control-summary-container');
           
@@ -2540,9 +2536,9 @@
           }
           function _processInitialExtent(content) {
               var mapml = this.responseXML || content;
-              if(mapml.querySelector('feature'))layer._content = mapml;
+              if(mapml.querySelector && mapml.querySelector('feature'))layer._content = mapml;
               if(!this.responseXML && this.responseText) mapml = new DOMParser().parseFromString(this.responseText,'text/xml');
-              if (this.readyState === this.DONE && mapml.querySelector) {
+              if (this.readyState === this.DONE && mapml.querySelector && !mapml.querySelector("parsererror")) {
                   var serverExtent = mapml.querySelector('extent') || mapml.querySelector('meta[name=projection]'), projection;
 
                   if (serverExtent.tagName.toLowerCase() === "extent" && serverExtent.hasAttribute('units')){
@@ -2569,6 +2565,9 @@
                        
                       layer.fire('changeprojection', {href:  (new URL(selectedAlternate.getAttribute('href'), base)).href}, false);
                       return;
+                  } else if (!projectionMatch && layer._map && layer._map.options.mapEl.querySelectorAll("layer-").length === 1){
+                    layer._map.options.mapEl.projection = projection;
+                    return;
                   } else if (serverExtent.querySelector('link[rel=tile],link[rel=image],link[rel=features],link[rel=query]') &&
                           serverExtent.hasAttribute("units")) {
                     layer._templateVars = [];
@@ -2778,6 +2777,7 @@
                   layer.error = true;
               }
               layer.fire('extentload', layer, false);
+              layer._layerEl.dispatchEvent(new CustomEvent('extentload', {detail: layer,}));
           }
       },
       _createExtent: function () {
@@ -3363,6 +3363,7 @@
           if (layers[i].options._leafletLayer)
             boundsRect.bindTooltip(layers[i].options._leafletLayer._title, { sticky: true });
           this.addLayer(boundsRect);
+          boundsRect.on('contextmenu', this._openContextMenu, this);
           j++;
         }
       }
@@ -3371,6 +3372,11 @@
     _mapLayerUpdate: function (e) {
       this.clearLayers();
       this._addBounds(e.target);
+    },
+
+    _openContextMenu: function (e) {
+      L.DomEvent.stop(e);
+      this._map.contextMenu._showAtPoint(e.containerPoint, e, this._map.contextMenu._container);
     },
   });
 
@@ -3580,7 +3586,8 @@
           let div = L.DomUtil.create("div", "mapml-popup-content"),
               c = L.DomUtil.create("iframe");
           c.style = "border: none";
-          c.srcdoc = `<meta http-equiv="content-security-policy" content="script-src 'none';">` + mapmldoc.querySelector('feature properties').innerHTML;
+          c.srcdoc = mapmldoc.querySelector('feature properties').innerHTML;
+          c.setAttribute("sandbox","allow-same-origin allow-forms");
           div.appendChild(c);
           // passing a latlng to the popup is necessary for when there is no
           // geometry / null geometry
@@ -3596,7 +3603,8 @@
           let div = L.DomUtil.create("div", "mapml-popup-content"),
               c = L.DomUtil.create("iframe");
           c.style = "border: none";
-          c.srcdoc = `<meta http-equiv="content-security-policy" content="script-src 'none';">` + text;
+          c.srcdoc = text;
+          c.setAttribute("sandbox","allow-same-origin allow-forms");
           div.appendChild(c);
           layer.bindPopup(div, popupOptions).openPopup(loc);
         }
@@ -3800,41 +3808,8 @@
     },
 
     _zoomToLayer: function (e) {
-      let map = e instanceof KeyboardEvent ? this._map : this,
-          layerElem = map.contextMenu._layerClicked.layer._layerEl,
-          tL = layerElem.extent.topLeft.pcrs,
-          bR = layerElem.extent.bottomRight.pcrs,
-          layerBounds = L.bounds(L.point(tL.horizontal, tL.vertical), L.point(bR.horizontal, bR.vertical)),
-          center = map.options.crs.unproject(layerBounds.getCenter(true)),
-          currentZoom = map.getZoom();
-
-      map.setView(center, currentZoom, {animate:false});
-      let mapBounds = M.pixelToPCRSBounds(
-        map.getPixelBounds(),
-        map.getZoom(),
-        map.options.projection);
-      
-      //fits the bounds to the map view
-      if(mapBounds.contains(layerBounds)){
-        while(mapBounds.contains(layerBounds) && (currentZoom + 1) <= layerElem.extent.zoom.maxZoom){
-          currentZoom++;
-          map.setView(center, currentZoom, {animate:false});
-          mapBounds = M.pixelToPCRSBounds(
-            map.getPixelBounds(),
-            map.getZoom(),
-            map.options.projection);
-        }
-        if(currentZoom - 1 >= 0) map.flyTo(center, (currentZoom - 1));
-      } else {
-        while(!(mapBounds.contains(layerBounds)) && (currentZoom - 1) >= layerElem.extent.zoom.minZoom){
-          currentZoom--;
-          map.setView(center, currentZoom, {animate:false});
-          mapBounds = M.pixelToPCRSBounds(
-            map.getPixelBounds(),
-            map.getZoom(),
-            map.options.projection);
-        }
-      }
+      let context = e instanceof KeyboardEvent ? this._map.contextMenu : this.contextMenu;
+      context._layerClicked.layer._layerEl.focus();
     },
 
     _goForward: function(e){
@@ -4578,31 +4553,62 @@
       this.push(parseFloat(element));
     },
 
-    handleLink: function (link, linkTarget, linkType, leafletLayer) {
-      let layer = document.createElement('layer-');
-      if(linkType === "text/html" && linkTarget !== "_blank") linkTarget = "_top";
-      layer.setAttribute('src', link);
-      layer.setAttribute('checked', '');
-      switch (linkTarget) {
-        case "_blank":
-          if(linkType === "text/html"){
-            window.open(link);
-          } else {
-            leafletLayer._map.options.mapEl.appendChild(layer);
+    handleLink: function (link, leafletLayer) {
+      let zoomTo, justPan = false, layer, map = leafletLayer._map, opacity;
+      if(link.type === "text/html" && link.target !== "_blank"){  // all other target values other than blank behave as _top
+        link.target = "_top";
+      } else if (link.type !== "text/html" && link.url.includes("#")){
+        let hash = link.url.split("#"), loc = hash[1].split(",");
+        zoomTo = {z: loc[0] || 0, lng: loc[1] || 0, lat: loc[2] || 0};
+        justPan = !hash[0]; // if the first half of the array is an empty string then the link is just for panning
+        if(["/", ".","#"].includes(link.url[0])) link.target = "_self";
+      }
+      if(!justPan) {
+        let newLayer = false;
+        layer = document.createElement('layer-');
+        layer.setAttribute('src', link.url);
+        layer.setAttribute('checked', '');
+        switch (link.target) {
+          case "_blank":
+            if (link.type === "text/html") {
+              window.open(link.url);
+            } else {
+              map.options.mapEl.appendChild(layer);
+              newLayer = true;
+            }
+            break;
+          case "_parent":
+            for (let l of map.options.mapEl.querySelectorAll("layer-"))
+              if (l._layer !== leafletLayer) map.options.mapEl.removeChild(l);
+            map.options.mapEl.appendChild(layer);
+            map.options.mapEl.removeChild(leafletLayer._layerEl);
+            newLayer = true;
+            break;
+          case "_top":
+            window.location.href = link.url;
+            break;
+          default:
+            opacity = leafletLayer._layerEl.opacity;
+            leafletLayer._layerEl.insertAdjacentElement('beforebegin', layer);
+            map.options.mapEl.removeChild(leafletLayer._layerEl);
+            newLayer = true;
+        }
+        if(!link.inPlace && newLayer) L.DomEvent.on(layer,'extentload', function focusOnLoad(e) {
+          if(newLayer && ["_parent", "_self"].includes(link.target) && layer.parentElement.querySelectorAll("layer-").length === 1)
+            layer.parentElement.projection = layer._layer.getProjection();
+          if(layer.extent){
+            if(zoomTo) layer.parentElement.zoomTo(+zoomTo.lat, +zoomTo.lng, +zoomTo.z);
+            else layer.focus();
+            L.DomEvent.off(layer, 'extentload', focusOnLoad);
           }
-          break;
-        case "_parent":
-          for(let l of leafletLayer._map.options.mapEl.querySelectorAll("layer-"))
-            if(l._layer !== leafletLayer) leafletLayer._map.options.mapEl.removeChild(l);
-          leafletLayer._map.options.mapEl.appendChild(layer);
-          leafletLayer._map.options.mapEl.removeChild(leafletLayer._layerEl);
-          break;
-        case "_top":
-          window.location.href = link;
-          break;
-        default:
-          leafletLayer._layerEl.insertAdjacentElement('beforebegin', layer);
-          leafletLayer._map.options.mapEl.removeChild(leafletLayer._layerEl);
+
+          if(opacity) layer.opacity = opacity;
+          map.getContainer().focus();
+        });
+      } else if (zoomTo && !link.inPlace && justPan){
+        leafletLayer._map.options.mapEl.zoomTo(+zoomTo.lat, +zoomTo.lng, +zoomTo.z);
+        if(opacity) layer.opacity = opacity;
+        map.getContainer().focus();
       }
     },
   };
@@ -4834,41 +4840,31 @@
     },
 
     /**
-     * Removes the focus handler, and calls the leaflet L.Path.onRemove
-     */
-    onRemove: function () {
-      if(this.options.link) {
-        this.off({
-          click: this._handleLinkClick,
-          keypress: this._handleLinkKeypress,
-        });
-      }
-
-      if(this.options.interactive) this.off('keypress', this._handleSpaceDown);
-
-      L.Path.prototype.onRemove.call(this);
-    },
-
-    /**
      * Attaches link handler to the sub parts' paths
      * @param path
      * @param link
-     * @param linkTarget
-     * @param linkType
      * @param leafletLayer
      */
-    attachLinkHandler: function (path, link, linkTarget, linkType, leafletLayer) {
-      let drag = false; //prevents click from happening on drags
-      L.DomEvent.on(path, 'mousedown', () =>{ drag = false;}, this);
-      L.DomEvent.on(path, 'mousemove', () =>{ drag = true;}, this);
+    attachLinkHandler: function (path, link, leafletLayer) {
+      let dragStart; //prevents click from happening on drags
+      L.DomEvent.on(path, 'mousedown', e => dragStart = {x:e.clientX, y:e.clientY}, this);
       L.DomEvent.on(path, "mouseup", (e) => {
-        L.DomEvent.stop(e);
-        if(!drag) M.handleLink(link, linkTarget, linkType, leafletLayer);
+        let onTop = true, nextLayer = this.options._leafletLayer._layerEl.nextElementSibling;
+        while(nextLayer && onTop){
+          if(nextLayer.tagName && nextLayer.tagName.toUpperCase() === "LAYER-")
+            onTop = !(nextLayer.checked && nextLayer._layer.queryable);
+          nextLayer = nextLayer.nextElementSibling;
+        }
+        if(onTop && dragStart) {
+          L.DomEvent.stop(e);
+          let dist = Math.sqrt(Math.pow(dragStart.x - e.clientX, 2) + Math.pow(dragStart.y - e.clientY, 2));
+          if (dist <= 5) M.handleLink(link, leafletLayer);
+        }
       }, this);
       L.DomEvent.on(path, "keypress", (e) => {
         L.DomEvent.stop(e);
         if(e.keyCode === 13 || e.keyCode === 32)
-          M.handleLink(link, linkTarget, linkType, leafletLayer);
+          M.handleLink(link, leafletLayer);
       }, this);
     },
 
@@ -4943,9 +4939,12 @@
           }*/
           classList +=`${elem.className} `;
         } else if(!output.link && elem.getAttribute("href")) {
-          output.link = elem.getAttribute("href");
-          if(elem.hasAttribute("target")) output.linkTarget = elem.getAttribute("target");
-          if(elem.hasAttribute("type")) output.linkType = elem.getAttribute("type");
+          let link = {};
+          link.url = elem.getAttribute("href");
+          if(elem.hasAttribute("target")) link.target = elem.getAttribute("target");
+          if(elem.hasAttribute("type")) link.type = elem.getAttribute("type");
+          if(elem.hasAttribute("inplace")) link.inPlace = true;
+          output.link = link;
         }
       }
       output.className = `${classList} ${this.options.className}`.trim();
@@ -5185,7 +5184,7 @@
         if (p.path)
           layer.group.appendChild(p.path);
         if (interactive){
-          if(layer.options.link) layer.attachLinkHandler(p.path, layer.options.link, layer.options.linkTarget, layer.options.linkType, layer.options._leafletLayer);
+          if(layer.options.link) layer.attachLinkHandler(p.path, layer.options.link, layer.options._leafletLayer);
           layer.addInteractiveTarget(p.path);
         }
 
@@ -5197,7 +5196,7 @@
         for (let subP of p.subrings) {
           if (subP.path) {
             if (subP.link){
-              layer.attachLinkHandler(subP.path, subP.link, subP.linkTarget, subP.linkType, layer.options._leafletLayer);
+              layer.attachLinkHandler(subP.path, subP.link, layer.options._leafletLayer);
               layer.addInteractiveTarget(subP.path);
             }
             layer.group.appendChild(subP.path);
@@ -5386,13 +5385,9 @@
         L.DomUtil.addClass(this.options.group, "leaflet-interactive");
         L.DomEvent.on(this.options.group, "keyup keydown mousedown", this._handleFocus, this);
         let firstLayer = layers[Object.keys(layers)[0]];
-        if(layers.length === 1 && firstLayer.options.link){ //if it's the only layer and it has a link, take it's link
-          this.options.link = firstLayer.options.link;
-          this.options.linkTarget = firstLayer.options.linkTarget;
-          this.options.linkType = firstLayer.options.linkType;
-        }
+        if(layers.length === 1 && firstLayer.options.link) this.options.link = firstLayer.options.link;
         if(this.options.link){
-          M.Feature.prototype.attachLinkHandler.call(this, this.options.group, this.options.link, this.options.linkTarget, this.options.linkType, this.options._leafletLayer);
+          M.Feature.prototype.attachLinkHandler.call(this, this.options.group, this.options.link, this.options._leafletLayer);
         } else {
           this.options.group.setAttribute("aria-expanded", "false");
           this.options.onEachFeature(this.options.properties, this);
